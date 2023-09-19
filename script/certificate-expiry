@@ -1,0 +1,69 @@
+#!perl
+use 5.020;
+use feature 'signatures';
+no warnings 'experimental::signatures';
+
+use Time::Piece;
+use Getopt::Long;
+use Pod::Usage;
+
+GetOptions(
+    'ssl=s' => \my $openssl,
+    'limit=s' => \my $limit,
+    'verbose' => \my $verbose,
+);
+
+=head1 NAME
+
+certificate-expiry - display certificate expiry for domains
+
+=head1 SYNOPSIS
+
+    certificate-expiry expired.badssl.com
+
+    certificate-expiry --limit=100 example.com
+
+=head1 OPTIONS
+
+=over 4
+
+=item B<--ssl> - path of openssl executable
+
+=item B<--limit> - number of days before certificate expiry
+
+=back
+
+=cut
+
+$openssl //= 'openssl';
+$limit   //= 19; # as Let's Encrypt has a renewal limit of 20 days
+
+sub get_expiry( $domain ) {
+    my @info = qx(echo "" | $openssl s_client -servername $domain -connect $domain:443 2>/dev/null | openssl x509 -noout -dates);
+    my %res = map {
+        /^(\w+)=(.*)/
+            or die "Weirdo line: '$_'";
+       # Sep 19 00:00:00 2023 GMT
+       my $ts = eval {
+           Time::Piece->strptime($2, '%b %d %H:%M:%S %Y %Z');
+       } or warn "Bad time string '$2' for '$domain'";
+       $1 => $ts
+    } @info;
+    return \%res;
+}
+
+my $today = Time::Piece->new();
+for my $domain (@ARGV) {
+    my $expiry = get_expiry( $domain );
+    my $duration = $expiry->{notAfter} - $today;
+    $duration = int( $duration / 60 / 60 / 24 );
+    if( $duration < 0 ) {
+        say "$domain has expired.";
+
+    } elsif( $duration < $limit ) {
+        say "$domain will expire in $duration days.";
+
+    } elsif( $verbose ) {
+        say "$domain will expire in $duration days, above $limit days.";
+    };
+}
